@@ -1,0 +1,27 @@
+{
+  "name": "ghtun-warzone",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": false
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    }
+  },
+  "postAttachCommand": "bash -c 'echo \"[G-Tunnel] Waiting for environment to be ready...\"; until gh codespace ports visibility 443:public -c $CODESPACE_NAME >/dev/null 2>&1; do sleep 5; done; if ! pgrep -x xray >/dev/null; then sudo /usr/local/bin/xray -c /etc/config.json &>/tmp/xray.log & sleep 2; fi; /usr/local/bin/print-configs.sh'",
+  "portsAttributes": {
+    "443": {
+      "label": "xray-ws",
+      "protocol": "https",
+      "onAutoForward": "silent"
+    }
+  },
+  "forwardPorts": [443],
+  "hostRequirements": {
+    "cpus": 2
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "inbounds": [
+    {
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "httpupgradeSettings": {
+          "path": "/live-chat",
+          "host": ""
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}

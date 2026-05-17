@@ -10,6 +10,7 @@ jobs:
     permissions:
       contents: write
       actions: write
+      id-token: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -17,24 +18,36 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install GitHub CLI
+        run: |
+          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
       - name: Create codespace
         id: create_cs
         run: |
           echo "Creating codespace from ${{ github.repository }}..."
           
-          CS_OUTPUT=$(gh codespace create \
+          CS_NAME=$(gh codespace create \
             --repo ${{ github.repository }} \
             --branch main \
             --machine basicLinux32gb \
             --display-name "gg-tunnel-auto-$(date +%Y%m%d-%H%M%S)" \
             --idle-timeout 30m \
-            --retention-period 1d)
-          
-          CS_NAME=$(echo "$CS_OUTPUT" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
+            --retention-period 1d \
+            --quiet)
           
           if [ -z "$CS_NAME" ]; then
-            sleep 10
-            CS_NAME=$(gh codespace list --json name,createdAt --jq 'sort_by(.createdAt) | last(.[]).name')
+            sleep 5
+            CS_NAME=$(gh codespace list --json name --jq '.[0].name' 2>/dev/null)
           fi
           
           echo "cs_name=$CS_NAME" >> $GITHUB_OUTPUT
@@ -43,8 +56,8 @@ jobs:
       - name: Wait for VS Code and auto-script to complete
         run: |
           echo "Waiting for VS Code to fully load and auto-script to run..."
-          echo "This may take 2-5 minutes depending on the script"
-          sleep 120
+          echo "This may take 3-5 minutes depending on the script"
+          sleep 180
           
           echo "Waiting additional 60 seconds for script completion..."
           sleep 60
@@ -54,44 +67,59 @@ jobs:
         run: |
           CS="${{ steps.create_cs.outputs.cs_name }}"
           
+          if [ -z "$CS" ]; then
+            echo "No codespace name found, exiting"
+            exit 1
+          fi
+          
           echo "Capturing terminal output from VS Code..."
           echo "========================================="
           
           gh codespace ssh -c "$CS" -- bash -c '
-          echo "=== CAPTURING VS CODE TERMINAL OUTPUT ==="
-          echo ""
-          
-          echo "--- Bash History (commands run in terminal) ---"
-          if [ -f "$HOME/.bash_history" ]; then
-            tail -500 "$HOME/.bash_history"
-          fi
-          
-          echo ""
-          echo "--- VS Code PtyHost Log (live terminal session) ---"
-          PTY_LOG=$(find $HOME/.vscode-remote/data/logs -name "ptyhost*.log" 2>/dev/null | head -1)
-          if [ -n "$PTY_LOG" ]; then
-            echo "File: $PTY_LOG"
-            cat "$PTY_LOG" 2>/dev/null
-          fi
-          
-          echo ""
-          echo "--- VS Code Renderer Log ---"
-          RENDERER_LOG=$(find $HOME/.vscode-remote/data/logs -name "renderer*.log" 2>/dev/null | head -1)
-          if [ -n "$RENDERER_LOG" ]; then
-            cat "$RENDERER_LOG" 2>/dev/null
-          fi
-          
-          echo ""
-          echo "--- Workspace directory contents ---"
-          ls -la /workspaces/${{ github.repository.name }}
-          ' 2>&1 | tee terminal_full_output.log
+            echo "=== CAPTURING VS CODE TERMINAL OUTPUT ==="
+            echo ""
+            
+            echo "--- Workspace directory contents ---"
+            ls -la /workspaces/${{ github.repository.name }} 2>/dev/null || ls -la /workspaces/* 2>/dev/null || ls -la
+            echo ""
+            
+            echo "--- Bash History (commands run in terminal) ---"
+            if [ -f "$HOME/.bash_history" ]; then
+              tail -500 "$HOME/.bash_history"
+            else
+              echo "No bash history found"
+            fi
+            echo ""
+            
+            echo "--- VS Code Server Logs ---"
+            if [ -d "$HOME/.vscode-remote/data/logs" ]; then
+              LATEST_LOG=$(ls -td $HOME/.vscode-remote/data/logs/*/ 2>/dev/null | head -1)
+              if [ -n "$LATEST_LOG" ]; then
+                echo "Latest log directory: $LATEST_LOG"
+                for logfile in main.log renderer*.log; do
+                  if [ -f "$LATEST_LOG/$logfile" ]; then
+                    echo ">>> $logfile (last 500 lines):"
+                    tail -500 "$LATEST_LOG/$logfile" 2>/dev/null
+                    echo ""
+                  fi
+                done
+              fi
+            fi
+            echo ""
+            
+            echo "--- All running processes ---"
+            ps aux | head -30
+          ' 2>&1 | tee terminal_full_output.log || echo "Failed to capture logs, but continuing"
 
       - name: Extract GG-Tunnel config from terminal output
         id: extract_config
         run: |
           echo "Extracting GG-Tunnel configuration..."
           
-          if grep -q "G-Tunnel GAMING CONFIGS" terminal_full_output.log; then
+          if [ ! -f terminal_full_output.log ]; then
+            echo "No terminal output file found"
+            echo "No config found" > config_extracted.txt
+          elif grep -q "G-Tunnel GAMING CONFIGS" terminal_full_output.log; then
             echo "Found G-Tunnel GAMING CONFIGS in logs"
             grep -A 500 "G-Tunnel GAMING CONFIGS" terminal_full_output.log | head -500 > config_extracted.txt
           elif grep -q "GG-Tunnel" terminal_full_output.log; then
@@ -113,31 +141,27 @@ jobs:
             echo "========================================"
             echo "Date: $(date)"
             echo "Repository: ${{ github.repository }}"
-            echo "Codespace: ${{ steps.create_cs.outputs.cs_name }}"
+            echo "Run ID: ${{ github.run_id }}"
             echo "========================================"
             echo ""
-            cat config_extracted.txt
+            if [ -f config_extracted.txt ]; then
+              cat config_extracted.txt
+            else
+              echo "No configuration extracted"
+            fi
           } > Config.txt
           
-          echo ""
-          echo "Config.txt saved with $(wc -l Config.txt) lines"
-
-      - name: Get codespace URL
-        id: cs_info
-        run: |
-          CS="${{ steps.create_cs.outputs.cs_name }}"
-          CS_URL=$(gh codespace view -c "$CS" --json webUrl --jq '.webUrl')
-          echo "cs_url=$CS_URL" >> $GITHUB_OUTPUT
-          echo "Codespace URL: $CS_URL"
+          echo "Config.txt created with $(wc -l Config.txt 2>/dev/null || echo 0) lines"
 
       - name: Commit and push Config.txt
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+          git pull origin main || git pull origin master || true
           git add Config.txt
-          git commit -m "Update Config.txt from auto-run [skip ci]" || echo "No changes to commit"
-          git push origin main || git push origin master || echo "Push failed"
+          git commit -m "Update Config.txt from codespace execution [skip ci]" || echo "No changes to commit"
+          git push origin main || git push origin master || echo "Push failed or no changes"
 
       - name: Upload logs
         if: always()
@@ -145,10 +169,22 @@ jobs:
         with:
           name: gg-tunnel-complete-logs
           path: |
-            *.log
-            *.txt
+            terminal_full_output.log
+            config_extracted.txt
             Config.txt
           retention-days: 30
+          if-no-files-found: warn
+
+      - name: Try to get codespace URL
+        id: cs_info
+        if: always()
+        run: |
+          CS="${{ steps.create_cs.outputs.cs_name }}"
+          if [ -n "$CS" ]; then
+            CS_URL=$(gh codespace view -c "$CS" --json webUrl --jq '.webUrl' 2>/dev/null || echo "Could not get URL")
+            echo "cs_url=$CS_URL" >> $GITHUB_OUTPUT
+            echo "Codespace URL: $CS_URL"
+          fi
 
       - name: Show summary
         if: always()
@@ -156,31 +192,30 @@ jobs:
           {
             echo "## GG-Tunnel Auto Execution Complete"
             echo ""
-            echo "### Config File"
-            echo "Config.txt has been saved to the repository root"
+            echo "Run Status: ${{ job.status }}"
             echo ""
-            echo "### Codespace (Still Active)"
-            echo "[Open Codespace](${{ steps.cs_info.outputs.cs_url }})"
-            echo ""
-            echo "### Config Content Preview"
-            echo '```'
-            head -100 Config.txt
-            echo '```'
+            if [ -f Config.txt ]; then
+              echo "### Config File"
+              echo "Config.txt has been created"
+              echo ""
+              echo "### Config Content Preview"
+              echo '```'
+              head -100 Config.txt
+              echo '```'
+            else
+              echo "### Config File"
+              echo "Config.txt could not be created"
+            fi
             echo ""
             echo "### Download Full Logs"
-            echo "Download artifact: gg-tunnel-complete-logs"
+            echo "Download artifact: \`gg-tunnel-complete-logs\` from the Artifacts section"
           } >> $GITHUB_STEP_SUMMARY
 
-      - name: Keep codespace alive
+      - name: Clean up - Delete codespace
         if: always()
         run: |
-          echo "========================================="
-          echo "Codespace is still active!"
-          echo "========================================="
-          echo ""
-          echo "URL: ${{ steps.cs_info.outputs.cs_url }}"
-          echo ""
-          echo "The codespace will remain active for 30 minutes of idle time"
-          echo "or 1 day retention period."
-          echo ""
-          echo "Config.txt has been saved to the repository."
+          CS="${{ steps.create_cs.outputs.cs_name }}"
+          if [ -n "$CS" ]; then
+            echo "Deleting codespace to avoid charges..."
+            gh codespace delete -c "$CS" --force || echo "Could not delete codespace"
+          fi

@@ -40,7 +40,7 @@ jobs:
             echo "https://github.com/login/device"
             echo "--------------------------------------------------------"
             
-            # ۵ دقیقه منتظر تایید کد توسط شما می‌ماند
+            # این دستور حداکثر ۵ دقیقه منتظر می‌ماند تا شما کد ۸ رقمی را وارد کنید
             timeout 300 gh auth login --web --scopes "repo,codespace,workflow" || {
               echo "❌ Authentication timeout or failed after 5 minutes."
               exit 1
@@ -55,13 +55,14 @@ jobs:
         run: |
           echo "Creating codespace from ${{ github.repository }}..."
           
+          # استفاده از فرمت زمانی صحیح 24h به جای 1d برای جلوگیری از ارور ساختار زمان
           CS_NAME=$(gh codespace create \
             --repo ${{ github.repository }} \
             --branch main \
             --machine basicLinux32gb \
             --display-name "gg-tunnel-run-$(date +%Y%m%d-%H%M%S)" \
             --idle-timeout 30m \
-            --retention-period 1d \
+            --retention-period 24h \
             --json name --jq '.name')
           
           if [ -z "$CS_NAME" ] || [[ "$CS_NAME" == *"error"* ]]; then
@@ -82,7 +83,7 @@ jobs:
           CS="${{ steps.create_cs.outputs.cs_name }}"
           echo "Connecting to $CS to check creation logs..."
           
-          # اتصال مستقیم با gh codespace ssh بدون نیاز به کلیدهای جفت شده روی اکانت
+          # اتصال مستقیم بدون نیاز به کلید فیزیکی اکانت و بررسی لاگ بیلد دِوکانتینر
           for i in {1..15}; do
             STATUS=$(gh codespace ssh -c "$CS" -- bash -c "cat /workspaces/.codespaces/.proxy/vscodeserver/creation.log 2>/dev/null | grep -i 'creation' | tail -1" || true)
             echo "Checking setup status... Attempt $i"
@@ -98,7 +99,7 @@ jobs:
             exit 1
           fi
           
-          # جمع‌آوری تمام لاگ‌ها با استفاده از قابلیت پروکسی مستقیم CLI
+          # جمع‌آوری لاگ‌ها از کانتینر در حال اجرا
           gh codespace ssh -c "$CS" -- bash -c '
             echo "=== TERMINAL OUTPUT ==="
             
@@ -115,6 +116,7 @@ jobs:
 
       - name: Extract config
         run: |
+          # استخراج کانفیگ از خط شروع پترن مدنظر شما تا آخرین خط فایل لاگ
           if grep -q "G-Tunnel GAMING CONFIGS" terminal_full_output.log; then
             echo "Target config found! Extracting..."
             sed -n '/G-Tunnel GAMING CONFIGS/,$p' terminal_full_output.log > Config.txt

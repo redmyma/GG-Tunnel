@@ -131,7 +131,7 @@ jobs:
           if [ -n "$RENDERER_LOG" ]; then
             echo "فایل: $RENDERER_LOG"
             echo "------------------"
-            grep -i "terminal\|pty\|command" "$RENDERER_LOG" 2>/dev/null | tail-200
+            grep -i "terminal\|pty\|command" "$RENDERER_LOG" 2>/dev/null | tail -200
           fi
           
           echo ""

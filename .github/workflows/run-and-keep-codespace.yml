@@ -30,23 +30,22 @@ jobs:
         id: auth_step
         run: |
           if [ -n "${{ secrets.PAT_TOKEN }}" ]; then
-            echo "✅ PAT_TOKEN found in secrets. Logging in using token..."
+            echo "PAT_TOKEN found in secrets. Logging in using token..."
             echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
             gh auth status
           else
-            echo "⚠️ PAT_TOKEN is missing! Switching to Interactive Device Web Flow..."
+            echo "PAT_TOKEN is missing! Switching to Interactive Device Web Flow..."
             echo "--------------------------------------------------------"
             echo "Please look at the output below, copy the code, and open:"
             echo "https://github.com/login/device"
             echo "--------------------------------------------------------"
             
-            # این دستور حداکثر ۵ دقیقه منتظر می‌ماند تا شما کد ۸ رقمی را وارد کنید
             timeout 300 gh auth login --web --scopes "repo,codespace,workflow" || {
-              echo "❌ Authentication timeout or failed after 5 minutes."
+              echo "Authentication timeout or failed after 5 minutes."
               exit 1
             }
             
-            echo "✅ Device Authentication Successful!"
+            echo "Device Authentication Successful!"
             gh auth status
           fi
 
@@ -55,15 +54,21 @@ jobs:
         run: |
           echo "Creating codespace from ${{ github.repository }}..."
           
-          # استفاده از فرمت زمانی صحیح 24h به جای 1d برای جلوگیری از ارور ساختار زمان
-          CS_NAME=$(gh codespace create \
+          RAW_OUTPUT=$(gh codespace create \
             --repo ${{ github.repository }} \
             --branch main \
             --machine basicLinux32gb \
             --display-name "gg-tunnel-run-$(date +%Y%m%d-%H%M%S)" \
             --idle-timeout 30m \
-            --retention-period 24h \
-            --json name --jq '.name')
+            --retention-period 24h)
+          
+          echo "Raw output: $RAW_OUTPUT"
+          
+          CS_NAME=$(echo "$RAW_OUTPUT" | grep -o '[a-zA-Z0-9-]\+-[a-zA-Z0-9]\+-[a-zA-Z0-9]\+-[a-zA-Z0-9]\+' | head -n 1)
+          
+          if [ -z "$CS_NAME" ]; then
+            CS_NAME=$(echo "$RAW_OUTPUT" | tail -n 1)
+          fi
           
           if [ -z "$CS_NAME" ] || [[ "$CS_NAME" == *"error"* ]]; then
             echo "Failed to create codespace"
@@ -83,7 +88,6 @@ jobs:
           CS="${{ steps.create_cs.outputs.cs_name }}"
           echo "Connecting to $CS to check creation logs..."
           
-          # اتصال مستقیم بدون نیاز به کلید فیزیکی اکانت و بررسی لاگ بیلد دِوکانتینر
           for i in {1..15}; do
             STATUS=$(gh codespace ssh -c "$CS" -- bash -c "cat /workspaces/.codespaces/.proxy/vscodeserver/creation.log 2>/dev/null | grep -i 'creation' | tail -1" || true)
             echo "Checking setup status... Attempt $i"
@@ -99,7 +103,6 @@ jobs:
             exit 1
           fi
           
-          # جمع‌آوری لاگ‌ها از کانتینر در حال اجرا
           gh codespace ssh -c "$CS" -- bash -c '
             echo "=== TERMINAL OUTPUT ==="
             
@@ -116,7 +119,6 @@ jobs:
 
       - name: Extract config
         run: |
-          # استخراج کانفیگ از خط شروع پترن مدنظر شما تا آخرین خط فایل لاگ
           if grep -q "G-Tunnel GAMING CONFIGS" terminal_full_output.log; then
             echo "Target config found! Extracting..."
             sed -n '/G-Tunnel GAMING CONFIGS/,$p' terminal_full_output.log > Config.txt

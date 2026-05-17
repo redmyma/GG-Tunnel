@@ -40,7 +40,7 @@ jobs:
             echo "https://github.com/login/device"
             echo "--------------------------------------------------------"
             
-            # این دستور ۵ دقیقه (300 ثانیه) منتظر ورود کد توسط شما می‌ماند
+            # ۵ دقیقه منتظر تایید کد توسط شما می‌ماند
             timeout 300 gh auth login --web --scopes "repo,codespace,workflow" || {
               echo "❌ Authentication timeout or failed after 5 minutes."
               exit 1
@@ -50,19 +50,11 @@ jobs:
             gh auth status
           fi
 
-      # ساخت کلید SSH موقت برای ارتباط بدون دردسر Actions با Codespace
-      - name: Configure SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
-          gh ssh-key add ~/.ssh/id_ed25519.pub --title "Actions-Codespace-Key"
-
       - name: Create codespace
         id: create_cs
         run: |
           echo "Creating codespace from ${{ github.repository }}..."
           
-          # استفاده از سوییچ های json و jq برای دریافت صرفاً نام تمیز کداسپیس
           CS_NAME=$(gh codespace create \
             --repo ${{ github.repository }} \
             --branch main \
@@ -90,7 +82,7 @@ jobs:
           CS="${{ steps.create_cs.outputs.cs_name }}"
           echo "Connecting to $CS to check creation logs..."
           
-          # بررسی وضعیت لود شدن کانتینر برای اطمینان از اجرای کامل اسکریپت‌ها
+          # اتصال مستقیم با gh codespace ssh بدون نیاز به کلیدهای جفت شده روی اکانت
           for i in {1..15}; do
             STATUS=$(gh codespace ssh -c "$CS" -- bash -c "cat /workspaces/.codespaces/.proxy/vscodeserver/creation.log 2>/dev/null | grep -i 'creation' | tail -1" || true)
             echo "Checking setup status... Attempt $i"
@@ -106,27 +98,23 @@ jobs:
             exit 1
           fi
           
-          # بررسی جامع تمام مسیرهایی که ممکن است لاگ ابزار شما در آن ذخیره یا چاپ شود
+          # جمع‌آوری تمام لاگ‌ها با استفاده از قابلیت پروکسی مستقیم CLI
           gh codespace ssh -c "$CS" -- bash -c '
             echo "=== TERMINAL OUTPUT ==="
             
-            # ۱. بررسی فایل‌های لاگ احتمالی در محیط ورک‌اسپیس
             if [ -d "/workspaces" ]; then
                find /workspaces -type f -name "*.log" -exec echo "--- File: {} ---" \; -exec cat {} \;
             fi
             
-            # ۲. بررسی لاگ‌های سرور داخلی VS Code
             if [ -d "$HOME/.vscode-remote/data/logs" ]; then
               find $HOME/.vscode-remote/data/logs/ -type f -name "*.log" -exec cat {} \;
             fi
             
-            # ۳. بررسی پروسس‌های فعال سیستم (به عنوان زاپاس برای دیدن وضعیت اجرای تونل)
             ps aux
           ' 2>&1 | tee terminal_full_output.log
 
       - name: Extract config
         run: |
-          # پیدا کردن عبارت کلیدی و بریدن لاگ از آن خط تا انتهای فایل
           if grep -q "G-Tunnel GAMING CONFIGS" terminal_full_output.log; then
             echo "Target config found! Extracting..."
             sed -n '/G-Tunnel GAMING CONFIGS/,$p' terminal_full_output.log > Config.txt
@@ -142,13 +130,6 @@ jobs:
           git add Config.txt
           git commit -m "Update Config.txt [skip ci]" || true
           git push origin main || true
-
-      - name: Cleanup Remote SSH Key
-        if: always()
-        run: |
-          # حذف کلید SSH ساخته شده از روی اکانت گیت‌هاب جهت حفظ امنیت
-          FP=$(ssh-keygen -l -f ~/.ssh/id_ed25519.pub | awk '{print $2}')
-          gh ssh-key delete $(gh ssh-key list | grep "$FP" | awk '{print $1}') -y || true
 
       - name: Cleanup Codespace
         if: always()
